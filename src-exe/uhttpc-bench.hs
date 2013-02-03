@@ -2,6 +2,7 @@
 
 module Main where
 
+import           Control.Concurrent
 import           Control.Concurrent.Async
 import           Control.Monad
 import           Data.ByteString (ByteString)
@@ -17,10 +18,9 @@ import           Data.Monoid
 import           Data.Ord
 import           Data.Time.Clock.POSIX (getPOSIXTime)
 import           Data.Word
-import           GHC.Conc.Sync (setNumCapabilities,getNumCapabilities,getNumProcessors)
+import           GHC.Conc.Sync (getNumProcessors)
 import           Network.HTTP.MicroClient
 import           Network.Socket hiding (send, sendTo, recv, recvFrom)
-import           Network.URI
 import           System.Console.CmdArgs.Implicit
 import           System.IO
 import           System.Mem (performGC)
@@ -77,34 +77,13 @@ instance Default Args where
                          &= help "dump CSV data         (default: none)"
         , argUrl       = def &= argPos 0 &= typ "<url>"
         } &= program "uttpc-bench"
-          &= summary "Simple HTTP benchmark tool modelled after weighttp's CLI"
+          &= summary "Simple HTTP benchmark tool similiar to ab and weighttp"
 
--- |Split HTTP URL into (hostname,port,url-path)
-splitUrl :: String -> Either String (String,PortNumber,String)
-splitUrl url0 = do
-    uri <- note "invalid URI" $ parseAbsoluteURI url0
-
-    unless (uriScheme uri == "http:") $
-        Left "URI must have 'http' scheme"
-
-    urlauth <- note "missing host-part in URI" $ uriAuthority uri
-    let hostname = uriRegName urlauth
-
-    when (null hostname) $
-        Left "empty hostname in URL"
-
-    unless (null . uriUserInfo $ urlauth) $
-        Left "user/pass in URL not supported"
-
-    portnum <- case uriPort urlauth of
-        ""      -> return 80
-        ':':tmp -> return $! fromIntegral (read tmp :: Word)
-        _       -> Left "invalid port-number"
-
-    return (hostname,portnum,if null (uriPath uri) then "/" else uriPath uri)
 
 main :: IO ()
-main = do
+main = runInUnboundThread $ do
+    putStrLn "uhttpc-bench - a Haskell-based ab/weighttp-style webserver benchmarking tool\n"
+
     pargs <- cmdArgs def
     print (pargs :: Args)
 

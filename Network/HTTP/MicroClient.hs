@@ -4,6 +4,7 @@ module Network.HTTP.MicroClient where
 
 import           Control.Applicative
 import           Control.Exception
+import           Control.Monad
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as B8
@@ -18,6 +19,7 @@ import           Network.BSD
 import           Network.Socket hiding (send, sendTo, recv, recvFrom)
 import           Network.Socket.ByteString
 import           System.IO.Unsafe (unsafePerformIO)
+import           Network.URI
 
 -- |Minimal socket input-stream abstraction w/ single pushback & consumed byte-count
 data SockStream = SockStream {-# NOUNPACK #-} !Socket
@@ -192,3 +194,32 @@ recvHttpHeaders ss = do
     httpParseHeaderDone :: (ByteString,[ByteString]) -> Bool
     httpParseHeaderDone (_,(l:_)) | B.null l = True
     httpParseHeaderDone _ = False
+
+-- |Split HTTP URL into (hostname,port,url-path)
+splitUrl :: String -> Either String (String,PortNumber,String)
+splitUrl url0 = do
+    uri <- note "invalid URI" $ parseAbsoluteURI url0
+
+    unless (uriScheme uri == "http:") $
+        Left "URI must have 'http' scheme"
+
+    urlauth <- note "missing host-part in URI" $ uriAuthority uri
+    let hostname = uriRegName urlauth
+
+    when (null hostname) $
+        Left "empty hostname in URL"
+
+    unless (null . uriUserInfo $ urlauth) $
+        Left "user/pass in URL not supported"
+
+    portnum <- case uriPort urlauth of
+        ""      -> return 80
+        ':':tmp -> return $! fromIntegral (read tmp :: Word)
+        _       -> Left "invalid port-number"
+
+    return (hostname,portnum,if null (uriPath uri) then "/" else uriPath uri)
+
+  where
+    -- | Tag the 'Nothing' value of a 'Maybe'
+    note :: a -> Maybe b -> Either a b
+    note a = maybe (Left a) Right
