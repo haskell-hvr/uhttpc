@@ -8,8 +8,6 @@ import           Control.Monad
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as B8
-import           Data.ByteString.Lex.Integral (readHexadecimal)
-import qualified Data.ByteString.Unsafe as B
 import           Data.Data
 import           Data.IORef
 import           Data.List
@@ -309,13 +307,8 @@ doReq lsa sa mss rawreq = do
 
     rcnt0 <- ssReadCnt ss
 
-    hds <- recvHttpHeaders ss
-    let (code, needClose, clen) = httpHeaderGetInfos hds
-
-    clen' <- case clen of
-        Just n | n < 0     -> fail "invalid response w/ unknown content-length"
-               | otherwise -> goClenBody ss n
-        Nothing            -> goChunkedBody ss
+    -- read HTTP response
+    HttpResponse {..} <- recvHttpResponse ss
 
     t2'  <- getTS -- after full response has been received
     rcnt1 <- ssReadCnt ss
@@ -325,54 +318,16 @@ doReq lsa sa mss rawreq = do
     unless (B.null tmp) $
         fail "trailing garbage detected in server response -- aborting"
 
-    ss' <- if needClose
-           then do
+    -- keep-alive handling
+    ss' <- if respKeepalive
+           then
+               return (Just ss)
+           else do
                ssClose ss
                return Nothing
-           else
-               return (Just ss)
 
-    let ent = Entry (ssId ss) code (rcnt1-rcnt0) clen' (fromMaybe t1 mt0) t1 t1' t2 t2'
+    let ent = Entry (ssId ss) respCode (rcnt1-rcnt0) respContentLen (fromMaybe t1 mt0) t1 t1' t2 t2'
 
     return $! strictPair ss' ent
-
   where
-    strictPair a b = a `seq` b `seq` (a,b)
-
-    goClenBody :: SockStream -> Int -> IO Word64
-    goClenBody ss n0
-      | n0 >= 0   = do
-          _ <- ssReadN ss (fI n0)
-          return $ fI n0
-      | otherwise = fail "goClenBody: negative content-length size"
-
-    goChunkedBody :: SockStream -> IO Word64
-    goChunkedBody ss = go' 0
-      where
-        go' n = do
-            csz <- consumeChunk B.empty
-            if csz > 0
-            then go' (n+csz)
-            else return n
-
-        stripCR = fst . B8.spanEnd (=='\r')
-
-        readHex bs | Just (n,rest) <- readHexadecimal bs, B.null rest, n>=0 = Just n
-                   | otherwise = Nothing
-
-        dropCrLf = do
-            tmp <- ssReadN ss 2
-            unless (tmp == "\r\n") $ fail "dropCrLf: expected CRLF"
-
-        consumeChunk :: ByteString -> IO Word64
-        consumeChunk buf
-            | Just j <- B.elemIndex 10 buf = do
-                let (chunksize',rest) = (stripCR $ B.unsafeTake j buf, B.unsafeDrop (j+1) buf)
-                ssUnRead rest ss
-                chunksize <- maybe (fail "invalid chunk-size") return $ readHex chunksize'
-                _ <- ssReadN ss chunksize
-                dropCrLf
-                return $! fI chunksize
-            | otherwise = do -- no '\n' seen yet... need more data
-                buf' <- ssRead' ss
-                consumeChunk (buf<>buf')
+    strictPair !a !b = (a,b)

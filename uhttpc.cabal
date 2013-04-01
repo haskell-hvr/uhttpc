@@ -19,7 +19,7 @@ library
   default-language:    Haskell2010
   exposed-modules:     Network.HTTP.MicroClient
   -- other-modules:       
-  build-depends:       base >=4.6 && <4.8, bytestring ==0.10.*, network ==2.4.*, bytestring-lexing ==0.4.*
+  build-depends:       base >=4.6 && <4.8, bytestring ==0.10.*, network ==2.4.*, bytestring-lexing ==0.4.*, deepseq ==1.3.*
   ghc-options:         -Wall -fwarn-tabs -funbox-strict-fields -O2
 
 executable uhttpc-bench

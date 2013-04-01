@@ -24,20 +24,24 @@ module Network.HTTP.MicroClient
     , ssReadCnt
     , ssWriteCnt
       -- * HTTP Protocol Handling
+    , HttpResponse(..)
     , recvHttpHeaders
     , httpHeaderGetInfos
+    , recvHttpResponse
+    , recvChunk
       -- * Utils
     , getSockAddr
     , splitUrl
     ) where
 
 import           Control.Applicative
+import           Control.DeepSeq (NFData(rnf),deepseq)
 import           Control.Exception
 import           Control.Monad
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as B8
-import           Data.ByteString.Lex.Integral (readDecimal)
+import           Data.ByteString.Lex.Integral (readDecimal,readHexadecimal)
 import qualified Data.ByteString.Unsafe as B
 import           Data.IORef
 import           Data.Monoid
@@ -285,6 +289,71 @@ recvHttpHeaders ss = do
     httpParseHeaderDone (_,l:_) | B.null l = True
     httpParseHeaderDone _ = False
 
+data HttpResponse = HttpResponse
+    { respCode       :: !Int         -- ^ status code
+    , respKeepalive  :: !Bool        -- ^ whether server keeps connection open
+    , respContentLen :: !Word64      -- ^ content length
+    , respHeader     :: [ByteString] -- ^ list of header lines w/o CRLF
+    , respContent    :: [ByteString] -- ^ list of chunks
+    } deriving Show
+
+instance NFData HttpResponse where
+    rnf (HttpResponse _ _ _ h c) = h `deepseq` c `deepseq` ()
+
+-- |Receive full HTTP response
+recvHttpResponse :: SockStream -> IO HttpResponse
+recvHttpResponse ss = do
+    hds <- recvHttpHeaders ss
+    let (code, needClose, clen) = httpHeaderGetInfos hds
+
+    (clen',body) <- case clen of
+        Just n | n < 0     -> fail "invalid response w/ unknown content-length"
+               | otherwise -> recvIdentityBody (fI n)
+        Nothing            -> recvChunkedBody
+
+    return $! HttpResponse code (not needClose) clen' hds body
+  where
+    recvIdentityBody n = do
+        res <- ssReadN ss n
+        return (n, [res])
+
+    recvChunkedBody = do
+        res <- go'
+        return (fI $ sum $ map B.length res, res)
+      where
+        go' = do
+            bs <- recvChunk ss
+            if B.null bs
+            then return []
+            else fmap (bs:) go'
+
+-- | Receive single HTTP chunk
+recvChunk :: SockStream -> IO ByteString
+recvChunk ss = go B.empty
+  where
+    go buf
+      | Just j <- B.elemIndex 10 buf = do
+          let (chunksize',rest) = (stripCR $ B.unsafeTake j buf, B.unsafeDrop (j+1) buf)
+          ssUnRead rest ss
+          chunksize <- maybe (fail "invalid chunk-size") return $ readHex chunksize'
+          bs <- ssReadN ss chunksize
+          dropCrLf
+          return bs
+      | otherwise = do -- no '\n' seen yet... need more data
+          buf' <- ssRead' ss
+          go (buf<>buf')
+
+    stripCR = fst . B8.spanEnd (=='\r')
+
+    dropCrLf = do
+        tmp <- ssReadN ss 2
+        unless (tmp == "\r\n") $ fail "dropCrLf: expected CRLF"
+
+    -- read positive hex
+    readHex bs | Just (n,rest) <- readHexadecimal bs, B.null rest, n>=0 = Just n
+               | otherwise = Nothing
+{-# INLINE recvChunk #-}
+
 -- |Split HTTP URL into (hostname,port,url-path)
 splitUrl :: String -> Either String (String,PortNumber,String)
 splitUrl url0 = do
@@ -320,3 +389,7 @@ whenJust mb f = maybe (return ()) f mb
 -- | Tag the 'Nothing' value of a 'Maybe'
 note :: a -> Maybe b -> Either a b
 note a = maybe (Left a) Right
+
+-- | Alias for 'fromIntegral'
+fI :: (Integral a, Num b) => a -> b
+fI = fromIntegral
