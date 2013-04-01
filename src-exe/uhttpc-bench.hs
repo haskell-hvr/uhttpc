@@ -1,6 +1,6 @@
-{-# LANGUAGE OverloadedStrings, DeriveDataTypeable, RecordWildCards #-}
+{-# LANGUAGE OverloadedStrings, DeriveDataTypeable, RecordWildCards, BangPatterns #-}
 
-module Main where
+module Main (main) where
 
 import           Control.Concurrent
 import           Control.Concurrent.Async
@@ -18,7 +18,7 @@ import           Data.Monoid
 import           Data.Ord
 import           Data.Time.Clock.POSIX (getPOSIXTime)
 import           Data.Word
-import           GHC.Conc.Sync (getNumProcessors)
+import           GHC.Conc.Sync (numCapabilities,getNumProcessors)
 import           Network.HTTP.MicroClient
 import           Network.Socket hiding (send, sendTo, recv, recvFrom)
 import           System.Console.CmdArgs.Implicit
@@ -32,49 +32,52 @@ type TS = Double
 getTS :: IO TS
 getTS = fmap realToFrac getPOSIXTime
 
--- |single measurement entry
-data Entry = Entry
-    { entConnId    :: {-# UNPACK #-} !Word -- each connections gets a new id
-    , entRespCode  :: {-# UNPACK #-} !Int
-    , entRespRLen  :: {-# UNPACK #-} !Word64 -- total amount of data received
-    , entRespCLen  :: {-# UNPACK #-} !Word64 -- payload content-length
-    , entConnect   :: {-# UNPACK #-} !TS   -- ts at connection-startup
-    , entReqStart  :: {-# UNPACK #-} !TS   -- ts before sending request
-    , entReqDone   :: {-# UNPACK #-} !TS   -- ts after sending request
-    , entRespStart :: {-# UNPACK #-} !TS   -- ts when response starts being received
-    , entRespDone  :: {-# UNPACK #-} !TS   -- ts when full response has been received
-    } deriving (Show)
+timeIO :: IO t -> IO (TS, TS, t)
+timeIO act = do
+    ts0 <- getTS
+    res <- act
+    tsd <- fmap (subtract ts0) getTS
+    return $! tsd `seq` (ts0,tsd,res)
 
--- | Tag the 'Nothing' value of a 'Maybe'
-note :: a -> Maybe b -> Either a b
-note a = maybe (Left a) Right
+fI :: (Integral a, Num b) => a -> b
+fI = fromIntegral
 
 data Args = Args
     { argNumReq    :: Word
-    , argThrCnt    :: Word
+    , argThrCnt    :: Int
     , argClnCnt    :: Word
     , argKeepAlive :: Bool
     , argCsv       :: FilePath
+    , argUA        :: String
     , argHdrs      :: [String]
+    , argVerbose   :: Bool
+    , argNoStats   :: Bool
     , argUrl       :: String
+    , argPostFn    :: FilePath
     } deriving (Show,Data,Typeable)
-
-newtype MURI = MURI String
 
 instance Default Args where
     def = Args
         { argNumReq    = 1 &= typ "num" &= explicit &= name "n"
                          &= help "number of requests    (default: 1)"
-        , argThrCnt    = 1 &= typ "num" &= explicit &= name "t"
-                         &= help "threadcount           (default: 1)"
+        , argThrCnt    = numCapabilities &= typ "num" &= explicit &= name "t"
+                         &= help ("threadcount           (default: " ++ show numCapabilities ++ ")")
         , argClnCnt    = 1 &= typ "num" &= explicit &= name "c"
                          &= help "concurrent clients    (default: 1)"
-        , argKeepAlive = False &= explicit &= name "k"
-                         &= help "keep alive            (default: no)"
+        , argKeepAlive = def &= explicit &= name "k"
+                         &= help "enable keep alive"
         , argHdrs      = def &= typ "str" &= explicit &= name "H"
                          &= help "add header to request"
+        , argUA        = "uhttpc-bench" &= explicit &= name "user-agent"
+                         &= help "specify User-Agent    (default: \"httpc-bench\")"
         , argCsv       = def &= typFile &= explicit &= name "csv"
-                         &= help "dump CSV data         (default: none)"
+                         &= help "dump request timings as CSV (RFC4180) file"
+        , argVerbose   = def &= explicit &= name "v" &= name "verbose"
+                         &= help "enable more verbose statistics and output"
+        , argNoStats   = def &= explicit &= name "no-stats"
+                         &= help "disable statistics"
+        , argPostFn    = def &= typFile &= explicit &= name "p"
+                         &= help "perform POST request with file-content as body"
         , argUrl       = def &= argPos 0 &= typ "<url>"
         } &= program "uttpc-bench"
           &= summary "Simple HTTP benchmark tool similiar to ab and weighttp"
@@ -85,7 +88,6 @@ main = runInUnboundThread $ do
     putStrLn "uhttpc-bench - a Haskell-based ab/weighttp-style webserver benchmarking tool\n"
 
     pargs <- cmdArgs def
-    print (pargs :: Args)
 
     (hostname,portnum,urlpath) <- either fail return $ splitUrl (argUrl pargs)
 
@@ -106,14 +108,14 @@ main = runInUnboundThread $ do
     sa <- getSockAddr hostname portnum
 
     -- set up worker threads
-    when (argThrCnt pargs > 1) $
-        setNumCapabilities (fromIntegral $ argThrCnt pargs)
-    thrcnt' <- fmap fromIntegral getNumCapabilities
+    when (fI (argThrCnt pargs) /= numCapabilities) $
+        setNumCapabilities (fI $ argThrCnt pargs)
+    thrcnt' <- getNumCapabilities
 
     when (argThrCnt pargs > 1 && thrcnt' /= argThrCnt pargs) $
-        fail "failed to execute request tread-count"
+        fail "failed to set worker tread-count"
 
-    numCpus <- fmap fromIntegral getNumProcessors
+    numCpus <- getNumProcessors
 
     when (thrcnt' > numCpus) $
         printf "*WARNING* thread-count (%u) > cpu cores (%u)\n" thrcnt' numCpus
@@ -121,70 +123,94 @@ main = runInUnboundThread $ do
     when (thrcnt' > 1) $
         printf "using up to %u Haskell execution threads\n" thrcnt'
 
-    unless (argClnCnt pargs >= thrcnt') $
+    unless (fI (argClnCnt pargs) >= thrcnt') $
         putStrLn "*WARNING* client-count should be >= thread-count"
 
     ----------------------------------------------------------------------------
-    let rawreq = B8.intercalate "\r\n" $
-                 [ "GET " <> B8.pack urlpath <> " HTTP/1.1"
+    let isPost = not $ null (argPostFn pargs)
+
+    rawreqb <- if isPost
+               then B.readFile (argPostFn pargs)
+               else return B.empty
+
+    let rawreqh = B8.intercalate "\r\n" $
+                 [ (if isPost then "POST " else "GET ") <> B8.pack urlpath <> " HTTP/1.1"
                  , "Host: " <> B8.pack hostname <> ":" <> B8.pack (show portnum)
-                 , "User-Agent: uttpc-bench"
                  ] ++
+                 [ "User-Agent: " <> B8.pack (argUA pargs) | not $ null $ argUA pargs ] ++
+                 [ "Connection: close" | not $ argKeepAlive pargs ] ++
                  map B8.pack (argHdrs pargs) ++
+                 [ "Content-Length: " <> B8.pack (show $ B.length rawreqb) | isPost ] ++
                  [ ""
                  , "" -- body
                  ]
+        rawreq = rawreqh <> rawreqb
 
-    putStrLn $ "using request: " ++ show rawreq ++ "\n"
+    when (argVerbose pargs) $
+        printf "using %d-byte request header (+ %d-byte body):\n %s\n\n" (B.length rawreq) (B.length rawreqb) (show rawreq)
+
     putStrLn "starting benchmark..."
 
-    reqCounter <- newIORef (fromIntegral (argNumReq pargs) :: Int)
-
-    let act j = do
-            ts0 <- getTS
-            ts' <- doReqs sa j reqCounter rawreq
-            ts1 <- getTS
-            return (ts0,ts1,ts')
+    reqCounter <- newIORef (fI (argNumReq pargs) :: Int)
 
     performGC
     ts0' <- getTS
-    tss  <- mapConcurrently act [1 .. argClnCnt pargs]
+    tss  <- mapConcurrently (\() -> timeIO (doReqs sa reqCounter rawreq))
+                            (replicate (fI $ argClnCnt pargs) ())
     ts1' <- getTS
     performGC
 
     numReqs' <- readIORef reqCounter
-    unless (numReqs' + (fromIntegral $ argClnCnt pargs) == 0) $ do
+    unless (numReqs' + fI (argClnCnt pargs) == 0) $
         fail "virtual clients exited prematurely!"
 
-    putStrLn "\nper-client stats:\n"
+    unless (argNoStats pargs) $ do
+        when (argVerbose pargs) $ do
+            putStrLn "\nper-client stats:\n"
 
-    forM_ tss $ \(ts0,ts1,ents') -> do
-        let n' = length ts'
-            ts' = map (\e -> entRespDone e - entReqStart e) ents'
-            tdelta = ts1-ts0
+            forM_ tss $ \(ts0,tdelta,ents') -> do
+                let n' = length ts'
+                    ts' = map (\e -> entRespDone e - entConnect e) ents'
+                    conncnt = length [ () | Entry {..} <- ents', entConnect /= entReqStart ]
 
-        _ <- printf " client spawned +%.6f s, %d reqs, %.1f req/s, finished in %.6f s\n"
-                    (ts0-ts0') n' (fromIntegral n' / tdelta) tdelta
-        _ <- printf " rtt min/avg/max = %.3f/%.3f/%.3f ms\n" (1000*minimum ts') (1000*avg ts') (1000*maximum ts')
-        putStrLn ""
+                _ <- printf " client spawned +%.6f s, %d reqs (%d conns), %.1f req/s, finished in %.6f s\n"
+                            (ts0-ts0') n' conncnt (fI n' / tdelta) tdelta
 
-    let allents = sortBy (comparing entConnect) $ concatMap (\(_,_,ents) -> ents) tss
-        (rlen,clen) = foldl' (\(r,c) e -> (r + entRespRLen e,c + entRespCLen e)) (0,0) allents
+                unless (null ts') $
+                    printf " rtt min/avg/med/max = %.3f/%.3f/%.3f/%.3f ms\n"
+                           (1000*minimum ts') (1000*avg ts') (1000*med ts') (1000*maximum ts')
+                putStrLn ""
 
-    _ <- printf "finished in %.6f seconds, %.1f req/s received\n"
-                (ts1'-ts0') (fromIntegral (argNumReq pargs) / (ts1'-ts0'))
+        let allents = concatMap (\(_,_,ents) -> ents) tss
+            (rlen,clen) = foldl' (\(!r,!c) e -> (r + entRespRLen e,c + entRespCLen e)) (0,0) allents
+            conncnt = length [ () | Entry {..} <- allents, entConnect /= entReqStart ]
+            allts = [ entRespDone - entConnect | Entry {..} <- allents ]
+            statcodes = hist $ map entRespCode allents
 
-    _ <- printf "data received: %.3f KiB/s, %u bytes total (%u bytes http + %u bytes content)\n"
-                (fromIntegral rlen / (1024 * (ts1'-ts0'))) rlen (rlen-clen) clen
+        _ <- printf "finished in %.6f seconds, %d reqs (%d conns), %.1f req/s received\n"
+                    (ts1'-ts0') (length allents) conncnt (fI (argNumReq pargs) / (ts1'-ts0'))
+
+        putStrLn $ "status codes: " ++ intercalate ", " [ show y ++ " HTTP-" ++ show x | (x,y) <- statcodes ]
+
+        _ <- printf "data received: %.3f KiB/s, %u bytes total (%u bytes http + %u bytes content)\n"
+                    (fI rlen / (1024 * (ts1'-ts0'))) rlen (rlen-clen) clen
+
+        when (argVerbose pargs) $ do
+            let [q2,q9,q25,q50,q75,q91,q98] = summary7 (map (*1000) allts)
+            printf "rtt 2/9|25/50/75|91/98-th quantile = %.3f/%.3f | %.3f/%.3f/%.3f | %.3f/%.3f ms\n" q2 q9 q25 q50 q75 q91 q98
+
+        printf "rtt min/avg/max = %.3f/%.3f/%.3f ms\n"
+               (1000*minimum allts) (1000*avg allts) (1000*maximum allts)
 
     ----------------------------------------------------------------------------
     -- CSV dumping
     unless (null $ argCsv pargs) $ do
         putStrLn "dumping CSV..."
+        let allents = sortBy (comparing entConnect) $ concatMap (\(_,_,ents) -> ents) tss
         withFile (argCsv pargs) WriteMode $ \h -> do
-            _ <- hPrintf h "timestamp_s,connect_ms,req_send_ms,resp_wait_ms,resp_recv_ms,resp_status,resp_total_bytes,resp_content_bytes,conn_id\n"
-            forM_ allents $ \Entry {..} -> do
-                hPrintf h "%.6f,%.4f,%.4f,%.4f,%.4f,%d,%u,%u,%u\n"
+            _ <- hPrintf h "timestamp_s,connect_ms,req_send_ms,resp_wait_ms,resp_recv_ms,resp_status,resp_total_bytes,resp_content_bytes,conn_id\r\n"
+            forM_ allents $ \Entry {..} ->
+                hPrintf h "%.6f,%.4f,%.4f,%.4f,%.4f,%d,%u,%u,%d\r\n"
                     entConnect
                     (1000 * (entReqStart  - entConnect))
                     (1000 * (entReqDone   - entReqStart))
@@ -200,39 +226,76 @@ main = runInUnboundThread $ do
     return ()
   where
     avg :: [Double] -> Double
-    avg xs = sn / fromIntegral ln
+    avg xs = sn / fI ln
       where
         (sn,ln) = foldl' go (0,0::Int) xs
-        go (s,l) x = (s+x,l+1)
+        go (!s,!l) x = (s+x,l+1)
 
-doReqs :: SockAddr -> Word -> IORef Int -> ByteString -> IO [Entry]
-doReqs sa idx cntref req = do
-    t0 <- getTS
-    ss <- ssConnect sa
-    es <- go ss (Just t0) []
-    ssClose ss
-    return es
+    med :: [Double] -> Double
+    med xs = sort xs !! (l `div` 2)
+      where
+        l = length xs
+
+    summary7 :: [Double] -> [Double]
+    summary7 xs = atIndices (sort xs) is
+      where
+        l = length xs
+        is = [ ((l-1)*q) `div` 100 | q <- [2,9,25,50,75,91,98] ]
+
+    atIndices :: [a] -> [Int] -> [a]
+    atIndices _ []      = []
+    atIndices [] _      = error "atIndices"
+    atIndices xs (i:is) = head xs' : atIndices xs' (map (subtract i) is)
+      where
+        xs' | i >= 0 = drop i xs
+            | otherwise = error "atIndices2"
+
+    hist xs = [ (head g, length g) | g <- group (sort xs) ]
+
+-- |repeat executing 'doReq' until req-counter goes below 0
+doReqs :: SockAddr -> IORef Int -> ByteString -> IO [Entry]
+doReqs sa cntref req = go Nothing []
   where
-    go ss mt0 a = do
-        isc <- sIsConnected (ssToSocket ss)
+    go ss a = do
         notDone <- decReqCounter cntref
-        if notDone && isc
+        if notDone
         then do
-            r <- doReq ss idx req mt0
-            go ss Nothing (r:a)
-        else
+            (ss',r) <- doReq sa ss req
+            go ss' (r:a)
+        else do
+            maybe (return ()) ssClose ss
             return a
 
     decReqCounter cnt = atomicModifyIORef' cnt (\n -> (n-1,n>0))
 
-doReq :: SockStream -> Word -> ByteString -> Maybe TS -> IO Entry
-doReq ss i rawreq mt0 = do
+-- |single measurement entry
+data Entry = Entry
+    { entConnId    :: {-# UNPACK #-} !Int -- each connections gets a new id
+    , entRespCode  :: {-# UNPACK #-} !Int
+    , entRespRLen  :: {-# UNPACK #-} !Word64 -- total amount of data received
+    , entRespCLen  :: {-# UNPACK #-} !Word64 -- payload content-length
+    , entConnect   :: {-# UNPACK #-} !TS   -- ts at connection-startup
+    , entReqStart  :: {-# UNPACK #-} !TS   -- ts before sending request
+    , entReqDone   :: {-# UNPACK #-} !TS   -- ts after sending request
+    , entRespStart :: {-# UNPACK #-} !TS   -- ts when response starts being received
+    , entRespDone  :: {-# UNPACK #-} !TS   -- ts when full response has been received
+    } deriving (Show)
+
+doReq :: SockAddr -> Maybe SockStream -> ByteString -> IO (Maybe SockStream,Entry)
+doReq sa mss rawreq = do
+    (ss,mt0) <- case mss of
+        Just ss' -> return (ss',Nothing)
+        Nothing  -> do
+            t0' <- getTS
+            ss' <- ssConnect sa
+            return (ss',Just t0')
+
     t1  <- getTS -- before request is sent (and socket is already connected)
     ssWrite rawreq ss
     t1' <- getTS -- after request has been sent
 
     _ <- ssPeek ss
-    t2  <- getTS -- after first packet has been received
+    t2  <- getTS -- after first packet of response has been received
 
     rcnt0 <- ssReadCnt ss
 
@@ -241,10 +304,10 @@ doReq ss i rawreq mt0 = do
 
     clen' <- case clen of
         Just n | n < 0     -> fail "invalid response w/ unknown content-length"
-               | otherwise -> goClenBody n
-        Nothing            -> goChunkedBody
+               | otherwise -> goClenBody ss n
+        Nothing            -> goChunkedBody ss
 
-    t2'  <- getTS
+    t2'  <- getTS -- after full response has been received
     rcnt1 <- ssReadCnt ss
 
     -- sanity check
@@ -252,22 +315,29 @@ doReq ss i rawreq mt0 = do
     unless (B.null tmp) $
         fail "trailing garbage detected in server response -- aborting"
 
-    when needClose $ do
-        putStrLn "server requested connection-close!"
-        ssClose ss
+    ss' <- if needClose
+           then do
+               ssClose ss
+               return Nothing
+           else
+               return (Just ss)
 
-    return $! Entry i code (rcnt1-rcnt0) clen' (fromMaybe t1 mt0) t1 t1' t2 t2'
+    let ent = Entry (ssId ss) code (rcnt1-rcnt0) clen' (fromMaybe t1 mt0) t1 t1' t2 t2'
+
+    return $! strictPair ss' ent
 
   where
-    goClenBody :: Int -> IO Word64
-    goClenBody n0
+    strictPair a b = a `seq` b `seq` (a,b)
+
+    goClenBody :: SockStream -> Int -> IO Word64
+    goClenBody ss n0
       | n0 >= 0   = do
-          _ <- ssRead' ss (fromIntegral n0)
-          return $ fromIntegral n0
+          _ <- ssReadN ss (fI n0)
+          return $ fI n0
       | otherwise = fail "goClenBody: negative content-length size"
 
-    goChunkedBody :: IO Word64
-    goChunkedBody = go' 0
+    goChunkedBody :: SockStream -> IO Word64
+    goChunkedBody ss = go' 0
       where
         go' n = do
             csz <- consumeChunk B.empty
@@ -281,7 +351,7 @@ doReq ss i rawreq mt0 = do
                    | otherwise = Nothing
 
         dropCrLf = do
-            tmp <- ssRead' ss 2
+            tmp <- ssReadN ss 2
             unless (tmp == "\r\n") $ fail "dropCrLf: expected CRLF"
 
         consumeChunk :: ByteString -> IO Word64
@@ -290,9 +360,9 @@ doReq ss i rawreq mt0 = do
                 let (chunksize',rest) = (stripCR $ B.unsafeTake j buf, B.unsafeDrop (j+1) buf)
                 ssUnRead rest ss
                 chunksize <- maybe (fail "invalid chunk-size") return $ readHex chunksize'
-                _ <- ssRead' ss chunksize
+                _ <- ssReadN ss chunksize
                 dropCrLf
-                return $! fromIntegral chunksize
+                return $! fI chunksize
             | otherwise = do -- no '\n' seen yet... need more data
-                buf' <- ssRead ss
+                buf' <- ssRead' ss
                 consumeChunk (buf<>buf')
