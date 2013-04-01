@@ -279,7 +279,7 @@ doReqs lsa sa cntref req = go Nothing []
 -- |single measurement entry
 data Entry = Entry
     { entConnId    :: {-# UNPACK #-} !Int -- each connections gets a new id
-    , entRespCode  :: {-# UNPACK #-} !Int
+    , entRespCode  :: {-# UNPACK #-} !HttpCode
     , entRespRLen  :: {-# UNPACK #-} !Word64 -- total amount of data received
     , entRespCLen  :: {-# UNPACK #-} !Word64 -- payload content-length
     , entConnect   :: {-# UNPACK #-} !TS   -- ts at connection-startup

@@ -25,6 +25,8 @@ module Network.HTTP.MicroClient
     , ssWriteCnt
       -- * HTTP Protocol Handling
     , HttpResponse(..)
+    , HttpCode
+    , TransferEncoding(..)
     , recvHttpHeaders
     , httpHeaderGetInfos
     , recvHttpResponse
@@ -229,13 +231,24 @@ getSockAddr hostname port = do
     he <- getHostByName hostname
     return $! SockAddrInet port (hostAddress he)
 
+-- |HTTP status code
+type HttpCode = Int
+
+-- |transfer-encoding/content-length information
+data TransferEncoding = TeIdentity !Word64 -- ^ identity w/ content length
+                      | TeChunked          -- ^ chunked transfer
+                      | TeInvalid
+                      deriving (Show,Eq)
+
+instance NFData TransferEncoding
+
 -- |Extract information from the header lines as returned by 'recvHttpHeaders'
 --
 -- returns: (status-code, close-conn, Just content-length /or/ Nothing (i.e. chunked))
-httpHeaderGetInfos :: [ByteString] -> (Int, Bool, Maybe Int)
+httpHeaderGetInfos :: [ByteString] -> (HttpCode, Bool, TransferEncoding)
 httpHeaderGetInfos hds0
     | ver /= "HTTP/1.1" = error "unsupported HTTP version"
-    | otherwise         = (code, connClose, if chunkTx then Nothing else Just clen)
+    | otherwise         = (code, connClose, if chunkTx then TeChunked else clen)
   where
     hds = init hds0
     (ver:code':_) = B.split 0x20 (last hds0) -- FIXME
@@ -249,9 +262,9 @@ httpHeaderGetInfos hds0
 
     clen | (h:_) <- filter ("Content-Length: " `B.isPrefixOf`) hds =
                  case readDecimal (B.unsafeDrop 16 h) of
-                     Just (n,_) -> n
-                     Nothing    -> -1
-         | otherwise = 0
+                     Just (n,_) -> TeIdentity n
+                     Nothing    -> TeInvalid
+         | otherwise = TeInvalid -- FIXME
 
     -- toLowerW8 w | 65 <= w, w <=  90 = w + 32 :: Word8
     --             | otherwise         = w
@@ -290,7 +303,7 @@ recvHttpHeaders ss = do
     httpParseHeaderDone _ = False
 
 data HttpResponse = HttpResponse
-    { respCode       :: !Int         -- ^ status code
+    { respCode       :: !HttpCode    -- ^ status code
     , respKeepalive  :: !Bool        -- ^ whether server keeps connection open
     , respContentLen :: !Word64      -- ^ content length
     , respHeader     :: [ByteString] -- ^ list of header lines w/o CRLF
@@ -304,12 +317,12 @@ instance NFData HttpResponse where
 recvHttpResponse :: SockStream -> IO HttpResponse
 recvHttpResponse ss = do
     hds <- recvHttpHeaders ss
-    let (code, needClose, clen) = httpHeaderGetInfos hds
+    let (code, needClose, te) = httpHeaderGetInfos hds
 
-    (clen',body) <- case clen of
-        Just n | n < 0     -> fail "invalid response w/ unknown content-length"
-               | otherwise -> recvIdentityBody (fI n)
-        Nothing            -> recvChunkedBody
+    (clen',body) <- case te of
+        TeIdentity n -> recvIdentityBody n
+        TeChunked    -> recvChunkedBody
+        TeInvalid    -> fail "invalid response w/ invalid transfer-encoding/content-length"
 
     return $! HttpResponse code (not needClose) clen' hds body
   where
