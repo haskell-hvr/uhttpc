@@ -52,6 +52,7 @@ data Args = Args
     , argHdrs      :: [String]
     , argVerbose   :: Bool
     , argNoStats   :: Bool
+    , argLAddr     :: String
     , argUrl       :: String
     , argPostFn    :: FilePath
     } deriving (Show,Data,Typeable)
@@ -78,6 +79,8 @@ instance Default Args where
                          &= help "disable statistics"
         , argPostFn    = def &= typFile &= explicit &= name "p"
                          &= help "perform POST request with file-content as body"
+        , argLAddr     = def &= typ "addr" &= explicit &= name "local-addr"
+                         &= help "set specific source address for TCP connections"
         , argUrl       = def &= argPos 0 &= typ "<url>"
         } &= program "uttpc-bench"
           &= summary "Simple HTTP benchmark tool similiar to ab and weighttp"
@@ -88,6 +91,7 @@ main = runInUnboundThread $ do
     putStrLn "uhttpc-bench - a Haskell-based ab/weighttp-style webserver benchmarking tool\n"
 
     pargs <- cmdArgs def
+    let verbose = argVerbose pargs
 
     (hostname,portnum,urlpath) <- either fail return $ splitUrl (argUrl pargs)
 
@@ -106,6 +110,12 @@ main = runInUnboundThread $ do
 
     -- setup socket address
     sa <- getSockAddr hostname portnum
+    lsa <- if null (argLAddr pargs)
+           then return Nothing
+           else fmap Just $ getSockAddr (argLAddr pargs) aNY_PORT
+
+    when verbose $
+        printf "connecting to %s (using local address %s)\n" (show sa) (maybe "*:*" show lsa)
 
     -- set up worker threads
     when (fI (argThrCnt pargs) /= numCapabilities) $
@@ -146,7 +156,7 @@ main = runInUnboundThread $ do
                  ]
         rawreq = rawreqh <> rawreqb
 
-    when (argVerbose pargs) $
+    when verbose $
         printf "using %d-byte request header (+ %d-byte body):\n %s\n\n" (B.length rawreq) (B.length rawreqb) (show rawreq)
 
     putStrLn "starting benchmark..."
@@ -155,7 +165,7 @@ main = runInUnboundThread $ do
 
     performGC
     ts0' <- getTS
-    tss  <- mapConcurrently (\() -> timeIO (doReqs sa reqCounter rawreq))
+    tss  <- mapConcurrently (\() -> timeIO (doReqs lsa sa reqCounter rawreq))
                             (replicate (fI $ argClnCnt pargs) ())
     ts1' <- getTS
     performGC
@@ -165,7 +175,7 @@ main = runInUnboundThread $ do
         fail "virtual clients exited prematurely!"
 
     unless (argNoStats pargs) $ do
-        when (argVerbose pargs) $ do
+        when verbose $ do
             putStrLn "\nper-client stats:\n"
 
             forM_ tss $ \(ts0,tdelta,ents') -> do
@@ -195,7 +205,7 @@ main = runInUnboundThread $ do
         _ <- printf "data received: %.3f KiB/s, %u bytes total (%u bytes http + %u bytes content)\n"
                     (fI rlen / (1024 * (ts1'-ts0'))) rlen (rlen-clen) clen
 
-        when (argVerbose pargs) $ do
+        when verbose $ do
             let [q2,q9,q25,q50,q75,q91,q98] = summary7 (map (*1000) allts)
             printf "rtt 2/9|25/50/75|91/98-th quantile = %.3f/%.3f | %.3f/%.3f/%.3f | %.3f/%.3f ms\n" q2 q9 q25 q50 q75 q91 q98
 
@@ -253,14 +263,14 @@ main = runInUnboundThread $ do
     hist xs = [ (head g, length g) | g <- group (sort xs) ]
 
 -- |repeat executing 'doReq' until req-counter goes below 0
-doReqs :: SockAddr -> IORef Int -> ByteString -> IO [Entry]
-doReqs sa cntref req = go Nothing []
+doReqs :: Maybe SockAddr -> SockAddr -> IORef Int -> ByteString -> IO [Entry]
+doReqs lsa sa cntref req = go Nothing []
   where
     go ss a = do
         notDone <- decReqCounter cntref
         if notDone
         then do
-            (ss',r) <- doReq sa ss req
+            (ss',r) <- doReq lsa sa ss req
             go ss' (r:a)
         else do
             maybe (return ()) ssClose ss
@@ -281,13 +291,13 @@ data Entry = Entry
     , entRespDone  :: {-# UNPACK #-} !TS   -- ts when full response has been received
     } deriving (Show)
 
-doReq :: SockAddr -> Maybe SockStream -> ByteString -> IO (Maybe SockStream,Entry)
-doReq sa mss rawreq = do
+doReq :: Maybe SockAddr -> SockAddr -> Maybe SockStream -> ByteString -> IO (Maybe SockStream,Entry)
+doReq lsa sa mss rawreq = do
     (ss,mt0) <- case mss of
         Just ss' -> return (ss',Nothing)
         Nothing  -> do
             t0' <- getTS
-            ss' <- ssConnect sa
+            ss' <- ssConnect lsa sa
             return (ss',Just t0')
 
     t1  <- getTS -- before request is sent (and socket is already connected)

@@ -98,10 +98,16 @@ ssClose :: SockStream -> IO ()
 ssClose = sClose . ssToSocket
 
 -- |Wrapper that creates TCP/IP IPv4 'SocketStream' and connects to 'SockAddr' created with 'getSockAddr'
-ssConnect :: SockAddr -> IO SockStream
-ssConnect sa = bracketOnError (socket AF_INET Stream tcpProtoNum)
-                              sClose
-                              (\sock -> connect sock sa >> ssFromSocket sock)
+--
+-- If provided, the @Maybe SockAddr@ argument allows to locally
+-- bind the socket to a specific source address.
+ssConnect :: Maybe SockAddr -> SockAddr -> IO SockStream
+ssConnect lsa rsa =
+    bracketOnError (socket AF_INET Stream tcpProtoNum) sClose $ \sock -> do
+        whenJust lsa (bind sock)
+        connect sock rsa
+        ssFromSocket sock
+{-# INLINE ssConnect #-}
 
 -- |Read data from stream.
 --
@@ -303,7 +309,14 @@ splitUrl url0 = do
 
     return (hostname,portnum,if null (uriPath uri) then "/" else uriPath uri)
 
-  where
-    -- | Tag the 'Nothing' value of a 'Maybe'
-    note :: a -> Maybe b -> Either a b
-    note a = maybe (Left a) Right
+
+-- internal helpers
+
+-- | 'when' meets 'maybe'
+whenJust :: Monad m => Maybe a -> (a -> m ()) -> m ()
+whenJust mb f = maybe (return ()) f mb
+{-# INLINE whenJust #-}
+
+-- | Tag the 'Nothing' value of a 'Maybe'
+note :: a -> Maybe b -> Either a b
+note a = maybe (Left a) Right
