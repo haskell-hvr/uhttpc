@@ -51,6 +51,7 @@ data Args = Args
     , argVerbose   :: Bool
     , argNoStats   :: Bool
     , argLAddr     :: String
+    , argWait      :: Double
     , argUrl       :: String
     , argPostFn    :: FilePath
     } deriving (Show,Data,Typeable)
@@ -79,6 +80,8 @@ instance Default Args where
                          &= help "perform POST request with file-content as body"
         , argLAddr     = def &= typ "addr" &= explicit &= name "local-addr"
                          &= help "set specific source address for TCP connections"
+        , argWait      = def &= typ "sec" &= explicit &= name "wait"
+                         &= help "wait time between requests (per client) in seconds"
         , argUrl       = def &= argPos 0 &= typ "<url>"
         } &= program "uttpc-bench"
           &= summary "Simple HTTP benchmark tool similiar to ab and weighttp"
@@ -163,7 +166,7 @@ main = runInUnboundThread $ do
 
     performGC
     ts0' <- getTS
-    tss  <- mapConcurrently (\() -> timeIO (doReqs lsa sa reqCounter rawreq))
+    tss  <- mapConcurrently (\() -> timeIO (doReqs lsa sa reqCounter rawreq (argWait pargs)))
                             (replicate (fI $ argClnCnt pargs) ())
     ts1' <- getTS
     performGC
@@ -261,18 +264,21 @@ main = runInUnboundThread $ do
     hist xs = [ (head g, length g) | g <- group (sort xs) ]
 
 -- |repeat executing 'doReq' until req-counter goes below 0
-doReqs :: Maybe SockAddr -> SockAddr -> IORef Int -> ByteString -> IO [Entry]
-doReqs lsa sa cntref req = go Nothing []
+doReqs :: Maybe SockAddr -> SockAddr -> IORef Int -> ByteString -> Double -> IO [Entry]
+doReqs lsa sa cntref req wtime = go Nothing []
   where
     go ss a = do
         notDone <- decReqCounter cntref
         if notDone
         then do
             (ss',r) <- doReq lsa sa ss req
+            when (wtimeUsecs > 0) $ threadDelay wtimeUsecs
             go ss' (r:a)
         else do
             maybe (return ()) ssClose ss
             return a
+
+    wtimeUsecs = floor $ 1000000 * wtime
 
     decReqCounter cnt = atomicModifyIORef' cnt (\n -> (n-1,n>0))
 
