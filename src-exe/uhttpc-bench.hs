@@ -141,24 +141,23 @@ main = runInUnboundThread $ do
     let isPost = not $ null (argPostFn pargs)
 
     rawreqb <- if isPost
-               then B.readFile (argPostFn pargs)
-               else return B.empty
+               then fmap Just $ B.readFile (argPostFn pargs)
+               else return Nothing
 
-    let rawreqh = B8.intercalate "\r\n" $
-                 [ (if isPost then "POST " else "GET ") <> B8.pack urlpath <> " HTTP/1.1"
-                 , "Host: " <> B8.pack hostname <> ":" <> B8.pack (show portnum)
-                 ] ++
-                 [ "User-Agent: " <> B8.pack (argUA pargs) | not $ null $ argUA pargs ] ++
-                 [ "Connection: close" | not $ argKeepAlive pargs ] ++
-                 map B8.pack (argHdrs pargs) ++
-                 [ "Content-Length: " <> B8.pack (show $ B.length rawreqb) | isPost ] ++
-                 [ ""
-                 , "" -- body
-                 ]
-        rawreq = rawreqh <> rawreqb
+    let hdrs | null (argUA pargs) = map B8.pack (argHdrs pargs)
+             | otherwise          = "User-Agent: " <> B8.pack (argUA pargs) :
+                                    map B8.pack (argHdrs pargs)
+
+        rawreqblen = maybe 0 B.length rawreqb
+        rawreq = mkHttp11Req (if isPost then POST else GET)
+                             (B8.pack urlpath)
+                             ("Host: " <> B8.pack hostname <> ":" <> B8.pack (show portnum))
+                             (argKeepAlive pargs)
+                             hdrs
+                             rawreqb
 
     when verbose $
-        printf "using %d-byte request header (+ %d-byte body):\n %s\n\n" (B.length rawreq) (B.length rawreqb) (show rawreq)
+        printf "using %d-byte request message (%d-byte body):\n %s\n\n" (B.length rawreq) rawreqblen (show rawreq)
 
     putStrLn "starting benchmark..."
 

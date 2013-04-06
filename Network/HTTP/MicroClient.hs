@@ -26,11 +26,17 @@ module Network.HTTP.MicroClient
       -- * HTTP Protocol Handling
     , HttpResponse(..)
     , HttpCode
+    , Method(..)
+    , ReqURI
+    , HostPort
+    , MsgHeader
     , TransferEncoding(..)
     , recvHttpHeaders
     , httpHeaderGetInfos
     , recvHttpResponse
     , recvChunk
+    , mkHttp11Req
+    , mkHttp11GetReq
       -- * Utils
     , getSockAddr
     , splitUrl
@@ -306,7 +312,7 @@ data HttpResponse = HttpResponse
     { respCode       :: !HttpCode    -- ^ status code
     , respKeepalive  :: !Bool        -- ^ whether server keeps connection open
     , respContentLen :: !Word64      -- ^ content length
-    , respHeader     :: [ByteString] -- ^ list of header lines w/o CRLF
+    , respHeader     :: [MsgHeader]  -- ^ list of header lines w/o CRLF
     , respContent    :: [ByteString] -- ^ list of chunks
     } deriving Show
 
@@ -391,6 +397,47 @@ splitUrl url0 = do
 
     return (hostname,portnum,if null (uriPath uri) then "/" else uriPath uri)
 
+-- | RFC2616 sec 5.1.1 @Method@
+data Method = GET | POST | HEAD | PUT | DELETE | TRACE | CONNECT | OPTIONS
+            deriving (Show,Eq,Enum)
+
+type ReqURI    = ByteString -- ^ RFC2616 sec 5.1.2 @Request-URI@ (e.g. @"/pub/index.html"@)
+type HostPort  = ByteString -- ^ RFC2616 sec 14.3 @host [ ":" port ]@ (e.g. @"localhost:8001"@)
+type MsgHeader = ByteString -- ^ RFC2616 sec 4.2 @message-header@ (e.g. @"Content-Type: text/plain"@
+
+-- |Construct general HTTP/1.1 request
+mkHttp11Req :: Method -> ReqURI -> HostPort -> Bool -> [MsgHeader] -> (Maybe ByteString) -> ByteString
+mkHttp11Req method urlpath hostport keepalive xhdrs mbody = mconcat request
+  where
+    request = methStr:urlpath:" HTTP/1.1\r\nHost: ":hostport:
+              (if keepalive then "\r\n" else "\r\nConnection: close\r\n"):
+              addCrLf' bodydat xhdrs
+
+    bodydat | Just body <- mbody  = [ "Content-Length: ", B8.pack (show $ B.length body)
+                                    , "\r\n\r\n"
+                                    , body
+                                    ]
+            | otherwise  = ["\r\n"]
+
+    addCrLf' :: [ByteString] -> [ByteString] -> [ByteString]
+    addCrLf' tl = go
+      where
+        go (x:xs) = x:"\r\n":go xs
+        go []     = tl
+
+    methStr = case method of
+        GET     -> "GET "
+        POST    -> "POST "
+        HEAD    -> "HEAD "
+        PUT     -> "PUT "
+        DELETE  -> "DELETE "
+        TRACE   -> "TRACE "
+        CONNECT -> "CONNECT "
+        OPTIONS -> "OPTIONS "
+
+-- |Construct general HTTP/1.1 request
+mkHttp11GetReq :: ReqURI -> HostPort -> Bool -> [MsgHeader] -> ByteString
+mkHttp11GetReq urlpath hostport keepalive xhdrs = mkHttp11Req GET urlpath hostport keepalive xhdrs Nothing
 
 -- internal helpers
 
