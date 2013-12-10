@@ -107,7 +107,7 @@ ssId :: SockStream -> Int
 ssId (SockStream _ _ _ _ i) = i
 
 ssClose :: SockStream -> IO ()
-ssClose = sClose . ssToSocket
+ssClose = close . ssToSocket
 
 -- |Wrapper that creates TCP/IP IPv4 'SocketStream' and connects to 'SockAddr' created with 'getSockAddr'
 --
@@ -115,7 +115,7 @@ ssClose = sClose . ssToSocket
 -- bind the socket to a specific source address.
 ssConnect :: Maybe SockAddr -> SockAddr -> IO SockStream
 ssConnect lsa rsa =
-    bracketOnError (socket AF_INET Stream tcpProtoNum) sClose $ \sock -> do
+    bracketOnError (socket AF_INET Stream tcpProtoNum) close $ \sock -> do
         whenJust lsa (bind sock)
         connect sock rsa
         ssFromSocket sock
