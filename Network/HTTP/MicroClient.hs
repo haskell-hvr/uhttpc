@@ -1,11 +1,13 @@
-{-# LANGUAGE CPP, OverloadedStrings #-}
+{-# LANGUAGE BangPatterns, CPP, OverloadedStrings #-}
 
 -- |Minimal HTTP client implementation
 --
 -- Note: this implementation only supports a subset of the HTTP
 --       protocol for performance-reasons. This implementation is not
 --       meant to be used for more than benchmarking purposes.
-
+--
+-- See @doReq@ in @src-exe/uhttpc-bench.hs@ for an usage example of this API
+--
 module Network.HTTP.MicroClient
     ( -- * /Socket Stream/ abstract data type
       SockStream
@@ -31,15 +33,18 @@ module Network.HTTP.MicroClient
     , HostPort
     , MsgHeader
     , TransferEncoding(..)
-    , recvHttpHeaders
-    , httpHeaderGetInfos
-    , recvHttpResponse
-    , recvChunk
     , mkHttp11Req
     , mkHttp11GetReq
-      -- * Utils
+    , recvHttpResponse
+      -- ** internal helpers of 'recvHttpResponse'
+    , recvHttpHeaders
+    , httpHeaderGetInfos
+    , recvChunk
+      -- * Utilities
     , getSockAddr
     , splitUrl
+    , getPOSIXTimeSecs
+    , getPOSIXTimeUSecs
     ) where
 
 import           Control.Applicative
@@ -48,10 +53,10 @@ import           Control.Exception
 import           Control.Monad
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Char8 as B8
-import           Data.ByteString.Lex.Integral (readDecimal,readHexadecimal)
+import           Data.ByteString.Lex.Integral (packDecimal, readDecimal,readHexadecimal)
 import qualified Data.ByteString.Unsafe as B
 import           Data.IORef
+import           Data.Maybe
 import           Data.Monoid
 import           Data.Tuple
 import           Data.Word
@@ -67,9 +72,9 @@ import           System.IO.Unsafe (unsafePerformIO)
 --
 -- This abstraction is inspired by io-streams but is tuned for low-overhead
 data SockStream = SockStream {-# NOUNPACK #-} !Socket
-                             {-# NOUNPACK #-} !(IORef ByteString)
-                             {-# NOUNPACK #-} !(IORef Word64) -- note: does contain readbuf's size
-                             {-# NOUNPACK #-} !(IORef Word64) -- data written
+                             {-# UNPACK #-} !(IORef ByteString)
+                             {-# UNPACK #-} !(IORef Word64) -- note: does contain readbuf's size
+                             {-# UNPACK #-} !(IORef Word64) -- data written
                              {-# UNPACK #-}   !Int -- hack: connection-id
 
 -- |Internal debug tracing helper
@@ -160,7 +165,6 @@ ssPeek ss@(SockStream s bufref rcntref _ _) = ssDebug "ssPeek" ss $ do
         writeIORef bufref buf'
         return buf'
     else do
-        writeIORef bufref B.empty
         return buf
 
 -- |May return empty string if no data has been buffered yet
@@ -215,9 +219,12 @@ ssReadCnt ss@(SockStream _ bufref rcntref _ _) = ssDebug "ssReadCnt" ss $ do
 
 -- |Write data out to socket (uses 'sendAll' internally)
 ssWrite :: ByteString -> SockStream -> IO ()
-ssWrite buf ss@(SockStream s _ _ wcntref _) = ssDebug "ssWrite" ss $ do
-    sendAll s buf
-    modifyIORef' wcntref (+ (fromIntegral $ B.length buf))
+ssWrite buf ss@(SockStream s _ _ wcntref _) = ssDebug "ssWrite" ss $
+    when (buflen /= 0) $ do
+        sendAll s buf
+        modifyIORef' wcntref (+ buflen)
+  where
+    buflen = fromIntegral $ B.length buf
 
 -- |Returns length of data written to stream
 ssWriteCnt :: SockStream -> IO Word64
@@ -301,8 +308,6 @@ recvHttpHeaders ss = do
           let (line1,rest1) = (stripCR $ B.unsafeTake i s0, B.unsafeDrop (i+1) s0)
           in (if B.null line1 then id else httpParseHeader) (rest1,line1:acc)
       | otherwise = (s0, acc) -- need more data
-      where
-        stripCR = fst . B8.spanEnd (=='\r')
 
     httpParseHeaderDone :: (ByteString,[ByteString]) -> Bool
     httpParseHeaderDone (_,l:_) | B.null l = True
@@ -319,7 +324,7 @@ data HttpResponse = HttpResponse
 instance NFData HttpResponse where
     rnf (HttpResponse _ _ _ h c) = h `deepseq` c `deepseq` ()
 
--- |Receive full HTTP response
+-- | Receive full HTTP response
 recvHttpResponse :: SockStream -> IO HttpResponse
 recvHttpResponse ss = do
     hds <- recvHttpHeaders ss
@@ -362,8 +367,6 @@ recvChunk ss = go B.empty
           buf' <- ssRead' ss
           go (buf<>buf')
 
-    stripCR = fst . B8.spanEnd (=='\r')
-
     dropCrLf = do
         tmp <- ssReadN ss 2
         unless (tmp == "\r\n") $ fail "dropCrLf: expected CRLF"
@@ -405,15 +408,21 @@ type ReqURI    = ByteString -- ^ RFC2616 sec 5.1.2 @Request-URI@ (e.g. @"/pub/in
 type HostPort  = ByteString -- ^ RFC2616 sec 14.3 @host [ ":" port ]@ (e.g. @"localhost:8001"@)
 type MsgHeader = ByteString -- ^ RFC2616 sec 4.2 @message-header@ (e.g. @"Content-Type: text/plain"@
 
--- |Construct general HTTP/1.1 request
-mkHttp11Req :: Method -> ReqURI -> HostPort -> Bool -> [MsgHeader] -> (Maybe ByteString) -> ByteString
+-- | Construct general HTTP/1.1 request.
+mkHttp11Req :: Method
+            -> ReqURI
+            -> HostPort
+            -> Bool        -- ^ if @False@ sets @Connection: close@ header
+            -> [MsgHeader] -- ^ additional HTTP request headers
+            -> (Maybe ByteString) -- ^ optional request body
+            -> ByteString  -- ^ Request constructed as a 'ByteString' ready to be sent over the wire
 mkHttp11Req method urlpath hostport keepalive xhdrs mbody = mconcat request
   where
     request = methStr:urlpath:" HTTP/1.1\r\nHost: ":hostport:
               (if keepalive then "\r\n" else "\r\nConnection: close\r\n"):
               addCrLf' bodydat xhdrs
 
-    bodydat | Just body <- mbody  = [ "Content-Length: ", B8.pack (show $ B.length body)
+    bodydat | Just body <- mbody  = [ "Content-Length: ", (fromJust . packDecimal . B.length) body
                                     , "\r\n\r\n"
                                     , body
                                     ]
@@ -435,7 +444,7 @@ mkHttp11Req method urlpath hostport keepalive xhdrs mbody = mconcat request
         CONNECT -> "CONNECT "
         OPTIONS -> "OPTIONS "
 
--- |Construct general HTTP/1.1 request
+-- | Construct HTTP/1.1 @GET@ request. See 'mkHttp11Req' for constructing more general requests.
 mkHttp11GetReq :: ReqURI -> HostPort -> Bool -> [MsgHeader] -> ByteString
 mkHttp11GetReq urlpath hostport keepalive xhdrs = mkHttp11Req GET urlpath hostport keepalive xhdrs Nothing
 
@@ -453,3 +462,40 @@ note a = maybe (Left a) Right
 -- | Alias for 'fromIntegral'
 fI :: (Integral a, Num b) => a -> b
 fI = fromIntegral
+
+-- | Strip one trailing CR if there is one
+stripCR :: ByteString -> ByteString
+stripCR s
+  | B.null s                = s
+#if MIN_VERSION_bytestring(0,10,2)
+  | B.unsafeLast s == 0x0d  = B.unsafeInit s
+#else
+  | B.last s == 0x0d        = B.init s
+#endif
+  | otherwise               = s
+
+
+-- | Return the time as the number of seconds (with up to microsecond
+-- precision) since the Epoch, @1970-01-01 00:00:00 +0000 (UTC)@.
+--
+-- This is a faster implementation the code below useful for
+-- benchmarking purposes.
+--
+-- > import Data.Time.Clock.POSIX (getPOSIXTime)
+-- >
+-- > getPOSIXTimeSecs :: IO Double
+-- > getPOSIXTimeSecs = fmap realToFrac getPOSIXTime
+--
+-- Note: this function returns /NaN/ in case the underlying
+-- @gettimeofday(2)@ call fails.
+foreign import ccall "get_posix_time_secs" getPOSIXTimeSecs :: IO Double
+
+-- | Return the time as the number of microseconds since the Epoch,
+-- @1970-01-01 00:00:00 +0000 (UTC)@.
+--
+--
+-- Note: this function returns @0@ in case the underlying
+-- @gettimeofday(2)@ call fails.
+--
+-- See also 'getPOSIXTimeSecs'
+foreign import ccall "get_posix_time_secs" getPOSIXTimeUSecs :: IO Word64

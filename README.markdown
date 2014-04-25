@@ -34,18 +34,40 @@ represents an `ab`/`weighttpd`-style HTTP benchmarking tool:
 
 # How to use it
 
-First, clone and build/install
-(This requires GHC 7.6.x or a GHC 7.7.x snapshot):
+First, install the `uhttpc` package
+(This requires GHC 7.6.x or later)
 
-    $ git clone git://github.com/hvr/uhttpc.git
-    $ cd uhttpc
-    $ cabal install
+    $ cabal install uhttpc
 
-And example invocation of `uhttpc-bench`:
+A simple example invocation:
+
+    $ uhttpc-bench -n 100000 -t1 -c3 -k http://localhost/
+
+    uhttpc-bench - a Haskell-based ab/weighttp-style webserver benchmarking tool
+
+    starting benchmark...
+    finished in 2.314289 seconds, 100000 reqs (3 conns), 43209.8 req/s received
+    status codes: 100000 HTTP-200
+    data received: 36205.098 KiB/s, 85800000 bytes total (24600000 bytes http + 61200000 bytes content)
+    rtt min/avg/max = 0.034/0.068/4.252 ms
+
+For comparison, [`weighttp`](https://github.com/lighttpd/weighttp) can be invoked with the very same arguments (in this case at least):
+
+    $ weighttp  -n 100000 -t1 -c3 -k http://localhost/
+    
+    weighttp - a lightweight and simple webserver benchmarking tool
+    
+    starting benchmark...
+    spawning thread #1: 3 concurrent requests, 100000 total requests
+    
+    finished in 2 sec, 333 millisec and 421 microsec, 42855 req/s, 35908 kbyte/s
+    requests: 100000 total, 100000 started, 100000 done, 100000 succeeded, 0 failed, 0 errored
+    status codes: 100000 2xx, 0 3xx, 0 4xx, 0 5xx
+    traffic: 85800000 bytes total, 24600000 bytes http, 61200000 bytes data
+
+Another example invocation of `uhttpc-bench`:
 
     $ uhttpc-bench http://www.google.com/ -v -c8 -n1000
-
-results in the following output:
 
     uhttpc-bench - a Haskell-based ab/weighttp-style webserver benchmarking tool
 
@@ -88,4 +110,4 @@ results in the following output:
 
 
 The `--csv` option allows to export the raw measurement data in format
-suitable for offline analysis with statistical tools such as `R`.
+suitable for offline analysis with statistical tools such as [`R`](http://www.r-project.org).

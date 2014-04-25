@@ -1,6 +1,6 @@
 name:                uhttpc
 version:             0.1.0.0
-synopsis:            Minimal HTTP client library for benchmarking
+synopsis:            Minimal HTTP client library optimized for benchmarking
 homepage:            https://github.com/hvr/uhttpc
 license:             GPL-3
 license-file:        LICENSE
@@ -11,22 +11,37 @@ category:            Network
 build-type:          Simple
 cabal-version:       >=1.10
 description:
-  uhttpc is a simple low-level and lightweight Haskell HTTP 1.1
-  library providing the bare minimum required for HTTP benchmarking
-  purposes.
+  @uhttpc@ contains a simple low-level and lightweight Haskell
+  <https://tools.ietf.org/html/rfc2616 HTTP 1.1>
+  library optimized for providing the bare minimum required for HTTP
+  benchmarking purposes and allowing for time measurements of the
+  individual phases of the HTTP transaction.
   .
-  This is not a RFC compliant HTTP client library and shall not be
-  used as a general purpose HTTP implementation.
+  This package also provides the command-line tool @uhttpc-bench@ as an
+  usage example which mimics the popular
+  <https://github.com/lighttpd/weighttp weighttp> HTTP benchmarking tool's
+  CLI.
+  .
+  WARNING: @uhttpc@ was originally developed for evaluating the new
+  <http://haskell.cs.yale.edu/wp-content/uploads/2013/08/hask035-voellmy.pdf \"Mio\" parallel I/O manager>
+  introduced with GHC 7.8 and provide a base-line for HTTP client libraries.
+  However, this is not a fully RFC compliant HTTP client library and
+  therefore ought not be used as a general purpose HTTP
+  implementation; Use libraries such as
+  <http://hackage.haskell.org/package/http-streams http-streams>
+  instead which aim toward full RFC compliance as well as having good
+  performance.
 
 library
   default-language:    Haskell2010
-  other-extensions:    CPP, OverloadedStrings
+  other-extensions:    BangPatterns, CPP, OverloadedStrings
   exposed-modules:     Network.HTTP.MicroClient
-  ghc-options:         -Wall -fwarn-tabs -funbox-strict-fields
+  ghc-options:         -Wall -fwarn-tabs
+  c-sources:           cbits/get_posix_time.c
   build-depends:
     base              >=4.6 && <4.8,
     bytestring        ==0.10.*,
-    network           ==2.4.*,
+    network           >=2.4.0.1 && <2.6,
     bytestring-lexing ==0.4.*,
     deepseq           ==1.3.*
 
@@ -46,8 +61,8 @@ executable uhttpc-bench
     -- build-deps which need version bounds
     async             ==2.0.*,
     bytestring-lexing ==0.4.*,
-    cmdargs           ==0.10.*,
-    time              ==1.4.*
+    cmdargs           ==0.10.*
+
 
 Source-Repository head
   Type: git

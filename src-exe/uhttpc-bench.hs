@@ -14,7 +14,6 @@ import           Data.List
 import           Data.Maybe
 import           Data.Monoid
 import           Data.Ord
-import           Data.Time.Clock.POSIX (getPOSIXTime)
 import           Data.Word
 import           GHC.Conc.Sync (numCapabilities,getNumProcessors)
 import           Network.HTTP.MicroClient
@@ -25,10 +24,10 @@ import           System.Mem (performGC)
 import           Text.Printf
 
 -- |Timestamp in seconds since POSIX epoch
-type TS = Double
-
 getTS :: IO TS
-getTS = fmap realToFrac getPOSIXTime
+getTS = getPOSIXTimeSecs
+
+type TS = Double
 
 timeIO :: IO t -> IO (TS, TS, t)
 timeIO act = do
@@ -56,42 +55,42 @@ data Args = Args
     , argPostFn    :: FilePath
     } deriving (Show,Data,Typeable)
 
-instance Default Args where
-    def = Args
-        { argNumReq    = 1 &= typ "num" &= explicit &= name "n"
-                         &= help "number of requests    (default: 1)"
-        , argThrCnt    = numCapabilities &= typ "num" &= explicit &= name "t"
-                         &= help ("threadcount           (default: " ++ show numCapabilities ++ ")")
-        , argClnCnt    = 1 &= typ "num" &= explicit &= name "c"
-                         &= help "concurrent clients    (default: 1)"
-        , argKeepAlive = def &= explicit &= name "k"
-                         &= help "enable keep alive"
-        , argHdrs      = def &= typ "str" &= explicit &= name "H"
-                         &= help "add header to request"
-        , argUA        = "uhttpc-bench" &= explicit &= name "user-agent"
-                         &= help "specify User-Agent    (default: \"httpc-bench\")"
-        , argCsv       = def &= typFile &= explicit &= name "csv"
-                         &= help "dump request timings as CSV (RFC4180) file"
-        , argVerbose   = def &= explicit &= name "v" &= name "verbose"
-                         &= help "enable more verbose statistics and output"
-        , argNoStats   = def &= explicit &= name "no-stats"
-                         &= help "disable statistics"
-        , argPostFn    = def &= typFile &= explicit &= name "p"
-                         &= help "perform POST request with file-content as body"
-        , argLAddr     = def &= typ "addr" &= explicit &= name "local-addr"
-                         &= help "set specific source address for TCP connections"
-        , argWait      = def &= typ "sec" &= explicit &= name "wait"
-                         &= help "wait time between requests (per client) in seconds"
-        , argUrl       = def &= argPos 0 &= typ "<url>"
-        } &= program "uttpc-bench"
-          &= summary "Simple HTTP benchmark tool similiar to ab and weighttp"
+defaultArgs :: Args
+defaultArgs = Args
+    { argNumReq    = 1 &= typ "num" &= name "n" &= explicit
+                     &= help "number of requests    (default: 1)"
+    , argThrCnt    = numCapabilities &= typ "num" &= explicit &= name "t"
+                     &= help ("threadcount           (default: " ++ show numCapabilities ++ ")")
+    , argClnCnt    = 1 &= typ "num" &= name "c" &= explicit
+                     &= help "concurrent clients    (default: 1)"
+    , argKeepAlive = def &= name "k" &= explicit
+                     &= help "enable keep alive"
+    , argHdrs      = def &= typ "str" &= name "H" &= explicit
+                     &= help "add header to request"
+    , argUA        = "uhttpc-bench" &= name "user-agent" &= explicit
+                     &= help "specify User-Agent    (default: \"httpc-bench\")"
+    , argCsv       = def &= typFile &= name "csv" &= explicit
+                     &= help "dump request timings as CSV (RFC4180) file"
+    , argVerbose   = def &= name "v" &= name "verbose" &= explicit
+                     &= help "enable more verbose statistics and output"
+    , argNoStats   = def &= name "no-stats" &= explicit
+                     &= help "disable statistics"
+    , argPostFn    = def &= typFile &= name "p" &= explicit
+                     &= help "perform POST request with file-content as body"
+    , argLAddr     = def &= typ "addr" &= name "local-addr" &= explicit
+                     &= help "set specific source address for TCP connections"
+    , argWait      = def &= typ "sec" &= name "wait" &= explicit
+                     &= help "wait time between requests (per client) in seconds"
+    , argUrl       = def &= argPos 0 &= typ "<url>"
+    } &= program "uttpc-bench"
+      &= summary "Simple HTTP benchmarking tool similiar to 'ab' and 'weighttp'"
 
 
 main :: IO ()
 main = runInUnboundThread $ do
     putStrLn "uhttpc-bench - a Haskell-based ab/weighttp-style webserver benchmarking tool\n"
 
-    pargs <- cmdArgs def
+    pargs <- cmdArgs defaultArgs
     let verbose = argVerbose pargs
 
     (hostname,portnum,urlpath) <- either fail return $ splitUrl (argUrl pargs)
