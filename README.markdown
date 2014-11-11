@@ -29,6 +29,8 @@ represents an `ab`/`weighttpd`-style HTTP benchmarking tool:
       -v      --verbose          enable more verbose statistics and output
               --no-stats         disable statistics
       -p=FILE                    perform POST request with file-content as body
+      -l=FILE                    perform a POST request per line, no quoting,
+                                 round-robin, each client independently
       -?      --help             Display help message
       -V      --version          Print version information
 
@@ -54,12 +56,12 @@ A simple example invocation:
 For comparison, [`weighttp`](https://github.com/lighttpd/weighttp) can be invoked with the very same arguments (in this case at least):
 
     $ weighttp  -n 100000 -t1 -c3 -k http://localhost/
-    
+
     weighttp - a lightweight and simple webserver benchmarking tool
-    
+
     starting benchmark...
     spawning thread #1: 3 concurrent requests, 100000 total requests
-    
+
     finished in 2 sec, 333 millisec and 421 microsec, 42855 req/s, 35908 kbyte/s
     requests: 100000 total, 100000 started, 100000 done, 100000 succeeded, 0 failed, 0 errored
     status codes: 100000 2xx, 0 3xx, 0 4xx, 0 5xx
