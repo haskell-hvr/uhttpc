@@ -208,7 +208,7 @@ ssReadN ss@(SockStream s bufref rcntref _ _) l0 = ssDebug "ssRead'" ss $ do
 -- |Push-back read data into 'SockStream'
 ssUnRead :: ByteString -> SockStream -> IO ()
 ssUnRead buf0 ss@(SockStream _ bufref _ _ _) =
-    ssDebug "ssUnRead" ss $ modifyIORef' bufref (<> buf0)
+    ssDebug "ssUnRead" ss $ modifyIORef' bufref (buf0 <>)
 
 -- |Returns length of data consumed (i.e. w/o 'ssUnRead' data)
 ssReadCnt :: SockStream -> IO Word64
