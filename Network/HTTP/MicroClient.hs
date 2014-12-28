@@ -253,7 +253,7 @@ data TransferEncoding = TeIdentity !Word64 -- ^ identity w/ content length
                       | TeInvalid
                       deriving (Show,Eq)
 
-instance NFData TransferEncoding
+instance NFData TransferEncoding where rnf !_ = ()
 
 -- |Extract information from the header lines as returned by 'recvHttpHeaders'
 --

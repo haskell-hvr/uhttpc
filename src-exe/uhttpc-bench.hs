@@ -1,4 +1,8 @@
-{-# LANGUAGE OverloadedStrings, DeriveDataTypeable, RecordWildCards, BangPatterns #-}
+{-# LANGUAGE Arrows #-}
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module Main (main) where
 
@@ -18,7 +22,8 @@ import           Data.Word
 import           GHC.Conc.Sync (numCapabilities,getNumProcessors)
 import           Network.HTTP.MicroClient
 import           Network.Socket hiding (send, sendTo, recv, recvFrom)
-import           System.Console.CmdArgs.Implicit
+import           Options.Applicative
+import           Options.Applicative.Arrows
 import           System.IO
 import           System.Mem (performGC)
 import           Text.Printf
@@ -55,42 +60,56 @@ data Args = Args
     , argPostFn    :: FilePath
     } deriving (Show,Data,Typeable)
 
-defaultArgs :: Args
-defaultArgs = Args
-    { argNumReq    = 1 &= typ "num" &= name "n" &= explicit
-                     &= help "number of requests    (default: 1)"
-    , argThrCnt    = numCapabilities &= typ "num" &= explicit &= name "t"
-                     &= help ("threadcount           (default: " ++ show numCapabilities ++ ")")
-    , argClnCnt    = 1 &= typ "num" &= name "c" &= explicit
-                     &= help "concurrent clients    (default: 1)"
-    , argKeepAlive = def &= name "k" &= explicit
-                     &= help "enable keep alive"
-    , argHdrs      = def &= typ "str" &= name "H" &= explicit
-                     &= help "add header to request"
-    , argUA        = "uhttpc-bench" &= name "user-agent" &= explicit
-                     &= help "specify User-Agent    (default: \"httpc-bench\")"
-    , argCsv       = def &= typFile &= name "csv" &= explicit
-                     &= help "dump request timings as CSV (RFC4180) file"
-    , argVerbose   = def &= name "v" &= name "verbose" &= explicit
-                     &= help "enable more verbose statistics and output"
-    , argNoStats   = def &= name "no-stats" &= explicit
-                     &= help "disable statistics"
-    , argPostFn    = def &= typFile &= name "p" &= explicit
-                     &= help "perform POST request with file-content as body"
-    , argLAddr     = def &= typ "addr" &= name "local-addr" &= explicit
-                     &= help "set specific source address for TCP connections"
-    , argWait      = def &= typ "sec" &= name "wait" &= explicit
-                     &= help "wait time between requests (per client) in seconds"
-    , argUrl       = def &= argPos 0 &= typ "<url>"
-    } &= program "uttpc-bench"
-      &= summary "Simple HTTP benchmarking tool similiar to 'ab' and 'weighttp'"
+argsParser :: Parser Args
+argsParser = runA $ proc () -> do
+    argNumReq <- asA (option auto $ value 1 <> metavar "NUM" <> short 'n'
+                      <> help "number of requests" <> showDefault) -< ()
+
+    argThrCnt <- asA (option auto $ value numCapabilities <> metavar "NUM" <> short 't'
+                      <> help "thread-count" <> showDefault) -< ()
+
+    argClnCnt <- asA (option auto $ value 1 <> metavar "NUM" <> short 'c'
+                      <> help "concurrent clients" <> showDefault) -< ()
+
+    argKeepAlive <- asA (switch $ short 'k' <> help "enable keep alive") -< ()
+
+    argHdrs <- asA (many (option str $ metavar "STR" <> short 'H'
+                    <> help "add header to request")) -< ()
+
+    argUA <- asA (option str $ value "httpc-bench" <> metavar "UA" <> long "user-agent"
+                  <> help "specify User-Agent header" <> showDefault) -< ()
+
+    argCsv <- asA (option str $ value "" <> metavar "FILE" <> long "csv"
+                   <> help "dump request timings as CSV (RFC4180) file") -< ()
+
+    argVerbose <- asA (switch $ short 'v' <> long "verbose"
+                       <> help "enable more verbose statistics and output") -< ()
+
+    argNoStats <- asA (switch $ long "no-stats"
+                       <> help "disable statistics") -< ()
+
+    argPostFn <- asA (option str $ value "" <> metavar "FILE" <> short 'p'
+                      <> help "perform POST request with file-content as body") -< ()
+
+    argLAddr <- asA (option str $ value "" <> metavar "IPADDR" <> long "local-addr"
+                     <> help "set specific source address for TCP connections") -< ()
+
+    argWait <- asA (option auto $ value 0.0 <> metavar "SECS" <> long "wait"
+                    <> help "wait time between requests (per client) in seconds"
+                    <> showDefault) -< ()
+
+    argUrl <- asA (argument str (metavar "<URL>")) -< ()
+
+    returnA -< Args {..}
 
 
 main :: IO ()
 main = runInUnboundThread $ do
     putStrLn "uhttpc-bench - a Haskell-based ab/weighttp-style webserver benchmarking tool\n"
 
-    pargs <- cmdArgs defaultArgs
+    pargs <- execParser (info (helper <*> argsParser)
+                              (fullDesc <> header "Simple HTTP benchmarking tool similiar to 'ab' and 'weighttp'")
+                        )
     let verbose = argVerbose pargs
 
     (hostname,portnum,urlpath) <- either fail return $ splitUrl (argUrl pargs)
