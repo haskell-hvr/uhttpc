@@ -181,16 +181,21 @@ main = runInUnboundThread $ do
 
     reqCounter <- newIORef (fI (argNumReq pargs) :: Int)
 
+    let clnCnt = fI $ argClnCnt pargs
+
     performGC
     ts0' <- getTS
-    tss  <- mapConcurrently (\() -> timeIO (doReqs lsa sa reqCounter rawreq (argWait pargs)))
-                            (replicate (fI $ argClnCnt pargs) ())
+
+    tss  <- if clnCnt == 1
+            then mapM (\() -> timeIO (doReqsAll lsa sa reqCounter rawreq (argWait pargs))) [()]
+            else mapConcurrently (\() -> timeIO (doReqs lsa sa reqCounter rawreq (argWait pargs)))
+                                 (replicate clnCnt ())
     ts1' <- getTS
     performGC
 
     numReqs' <- readIORef reqCounter
     unless (numReqs' + fI (argClnCnt pargs) == 0) $
-        fail "virtual clients exited prematurely!"
+        fail $ "virtual clients exited prematurely! " ++ show numReqs'
 
     unless (argNoStats pargs) $ do
         when verbose $ do
@@ -298,6 +303,25 @@ doReqs lsa sa cntref req wtime = go Nothing []
     wtimeUsecs = floor $ 1000000 * wtime
 
     decReqCounter cnt = atomicModifyIORef' cnt (\n -> (n-1,n>0))
+
+-- | Version of 'doReqs' that does all requests as indicated by req-counter at once
+--
+-- This updates the IORef only once and thus avoids additional overhead
+doReqsAll :: Maybe SockAddr -> SockAddr -> IORef Int -> ByteString -> Double -> IO [Entry]
+doReqsAll lsa sa cntref req wtime = do
+    n <- atomicModifyIORef' cntref (\n -> (n-(max 0 (n+1)),(max 0 n)))
+    go Nothing [] n
+  where
+    go ss a cnt
+        | cnt > 0 = do
+            (ss',r) <- doReq lsa sa ss req
+            when (wtimeUsecs > 0) $ threadDelay wtimeUsecs
+            go ss' (r:a) (cnt-1)
+        | otherwise = do
+            maybe (return ()) ssClose ss
+            return a
+
+    wtimeUsecs = floor $ 1000000 * wtime
 
 -- |single measurement entry
 data Entry = Entry
