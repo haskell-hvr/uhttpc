@@ -43,7 +43,7 @@ library
     bytestring        ==0.10.*,
     network           ==2.6.*,
     network-uri       ==2.6.*,
-    bytestring-lexing ==0.4.*,
+    bytestring-lexing >=0.4 && <0.6,
     deepseq           >=1.1 && <1.5
 
 executable uhttpc-bench
