@@ -1,12 +1,12 @@
 name:                uhttpc
-version:             0.1.0.1
+version:             0.1.1.0
 synopsis:            Minimal HTTP client library optimized for benchmarking
 homepage:            https://github.com/hvr/uhttpc
 license:             GPL-3
 license-file:        LICENSE
 author:              Herbert Valerio Riedel
 maintainer:          hvr@gnu.org
-copyright:           © 2013 Herbert Valerio Riedel
+copyright:           © 2013-2015 Herbert Valerio Riedel
 category:            Network
 build-type:          Simple
 cabal-version:       >=1.10
