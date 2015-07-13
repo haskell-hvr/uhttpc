@@ -32,6 +32,8 @@ description:
   instead which aim toward full RFC compliance as well as having good
   performance.
 
+extra-source-files: README.md CHANGELOG.md
+
 library
   default-language:    Haskell2010
   other-extensions:    BangPatterns, CPP, OverloadedStrings
