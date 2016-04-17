@@ -1,14 +1,13 @@
 # NB: don't set `language: haskell` here
 
 # See also https://github.com/hvr/multi-ghc-travis for more information
-env:
- - GHCVER=7.6.3 CABALVER=1.16
- - GHCVER=7.8.2 CABALVER=1.18
- - GHCVER=head  CABALVER=1.20
 
-matrix:
-  allow_failures:
-   - env: GHCVER=head  CABALVER=1.20
+os:
+ - linux
+ - osx
+
+env:
+ - GHCVER=7.8.4 CABALVER=1.18
 
 # Note: the distinction between `before_install` and `install` is not
 #       important.
