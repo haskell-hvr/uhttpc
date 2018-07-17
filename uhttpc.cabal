@@ -1,3 +1,4 @@
+cabal-version:       >=1.10
 name:                uhttpc
 version:             0.1.1.0
 synopsis:            Minimal HTTP client library optimized for benchmarking
@@ -9,7 +10,6 @@ maintainer:          hvr@gnu.org
 copyright:           © 2013-2015 Herbert Valerio Riedel
 category:            Network
 build-type:          Simple
-cabal-version:       >=1.10
 description:
   @uhttpc@ contains a simple low-level and lightweight Haskell
   <https://tools.ietf.org/html/rfc2616 HTTP 1.1>
@@ -44,7 +44,7 @@ library
   ghc-options:         -Wall -fwarn-tabs
   c-sources:           cbits/get_posix_time.c
   build-depends:
-    base              >=4.6 && <4.10,
+    base              >=4.6 && <4.12,
     bytestring        ==0.10.*,
     network           ==2.6.*,
     network-uri       ==2.6.*,
@@ -66,8 +66,8 @@ executable uhttpc-bench
     deepseq,
     network,
     -- build-deps which need version bounds
-    async                 >=2.0  && <2.2,
-    optparse-applicative  >=0.11 && <0.14
+    async                 ==2.0.* || ==2.1.* || ==2.2.*,
+    optparse-applicative  ==0.11.* || ==0.12.* || ==0.13.* || ==0.14.*
 
 Source-Repository head
   Type: git
