@@ -185,8 +185,7 @@ main = runInUnboundThread $ do
           let rawreqblen = maybe 0 B.length rawreqb
               msg = mkHttp11Req postOrGet
                                 (B8.pack urlpath)
-                                ("Host: " <> B8.pack hostname
-                                 <> ":" <> B8.pack (show portnum))
+                                (B8.pack hostname <> ":" <> B8.pack (show portnum))
                                 (argKeepAlive pargs)
                                 hdrs
                                 rawreqb

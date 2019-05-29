@@ -1,5 +1,6 @@
 #### 0.1.1.1
 
+- Fix incorrectly constructed `Host:` header in `uhttpc-bench` executable
 - Optimize/improve implementation of `getPOSIXTimeSecs` & `getPOSIXTimeUSecs`
 - Add support for `network-3.x`
 
