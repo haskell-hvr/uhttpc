@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns      #-}
+{-# LANGUAGE CApiFFI           #-}
 {-# LANGUAGE CPP               #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -152,7 +153,7 @@ ssRead ss@(SockStream s bufref rcntref _ _) = ssDebug "ssRead" ss $ do
         writeIORef bufref B.empty
         return buf
 
--- |Version of 'ssRead' that throws
+-- |Version of 'ssRead' that throws on EOF
 ssRead' :: SockStream -> IO ByteString
 ssRead' ss = do
     buf <- ssRead ss
@@ -499,7 +500,7 @@ stripCR s
 --
 -- Note: this function returns /NaN/ in case the underlying
 -- @gettimeofday(2)@ call fails.
-foreign import ccall "get_posix_time_secs" getPOSIXTimeSecs :: IO Double
+foreign import capi unsafe "hs_uhttpc.h get_posix_time_secs" getPOSIXTimeSecs :: IO Double
 
 -- | Return the time as the number of microseconds since the Epoch,
 -- @1970-01-01 00:00:00 +0000 (UTC)@.
@@ -509,4 +510,4 @@ foreign import ccall "get_posix_time_secs" getPOSIXTimeSecs :: IO Double
 -- @gettimeofday(2)@ call fails.
 --
 -- See also 'getPOSIXTimeSecs'
-foreign import ccall "get_posix_time_secs" getPOSIXTimeUSecs :: IO Word64
+foreign import capi unsafe "hs_uhttpc.h get_posix_time_usecs" getPOSIXTimeUSecs :: IO Word64

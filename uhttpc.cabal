@@ -33,7 +33,7 @@ description:
   instead which aim toward full RFC compliance as well as having good
   performance.
 
-extra-source-files: README.md CHANGELOG.md
+extra-source-files: README.md CHANGELOG.md cbits/hs_uhttpc.h
 
 tested-with: GHC ==8.6.5, GHC ==8.4.4, GHC ==8.2.2, GHC ==8.0.2, GHC==7.10.3, GHC==7.10.2, GHC==7.8.4, GHC==7.6.3
 
@@ -44,10 +44,11 @@ flag network--GE-3_0_0
 
 library
   default-language:    Haskell2010
-  other-extensions:    BangPatterns, CPP, OverloadedStrings
+  other-extensions:    BangPatterns, CPP, OverloadedStrings, CApiFFI
   exposed-modules:     Network.HTTP.MicroClient
   ghc-options:         -Wall -fwarn-tabs
-  c-sources:           cbits/get_posix_time.c
+  include-dirs:        cbits
+
   build-depends:
     base              >=4.6 && <4.13,
     bytestring        ==0.10.*,

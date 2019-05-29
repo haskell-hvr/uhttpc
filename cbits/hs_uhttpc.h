@@ -1,9 +1,13 @@
+#ifndef HS_UHTTPC_H
+#define HS_UHTTPC_H
+
 #include <stddef.h>
 #include <math.h>
 #include <sys/time.h>
 #include <stdint.h>
 
 // get POSIX time as FP value in seconds; returns NaN in case of error
+static inline
 double get_posix_time_secs(void)
 {
   struct timeval tval = { 0, 0, };
@@ -19,6 +23,7 @@ double get_posix_time_secs(void)
 }
 
 // returns number of microseconds since epoch; returns 0 in case of error
+static inline
 uint64_t get_posix_time_usecs(void)
 {
   struct timeval tval = { 0, 0, };
@@ -28,3 +33,5 @@ uint64_t get_posix_time_usecs(void)
 
   return ((((uint64_t)tval.tv_sec) * 1000000) + ((uint64_t) tval.tv_usec));
 }
+
+#endif
