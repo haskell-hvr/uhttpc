@@ -1,32 +1,32 @@
-{-# LANGUAGE Arrows #-}
-{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE Arrows             #-}
+{-# LANGUAGE BangPatterns       #-}
 {-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE OverloadedStrings  #-}
+{-# LANGUAGE RecordWildCards    #-}
 
 module Main (main) where
 
 import           Control.Concurrent
 import           Control.Concurrent.Async
-import           Control.DeepSeq (deepseq)
+import           Control.DeepSeq            (deepseq)
 import           Control.Monad
-import           Data.ByteString (ByteString)
-import qualified Data.ByteString as B
-import qualified Data.ByteString.Char8 as B8
+import           Data.ByteString            (ByteString)
+import qualified Data.ByteString            as B
+import qualified Data.ByteString.Char8      as B8
 import           Data.Data
 import           Data.IORef
 import           Data.List
 import           Data.Maybe
-import           Data.Monoid
+import           Data.Monoid                as Mon ((<>))
 import           Data.Ord
 import           Data.Word
-import           GHC.Conc.Sync (numCapabilities,getNumProcessors)
+import           GHC.Conc.Sync              (getNumProcessors, numCapabilities)
 import           Network.HTTP.MicroClient
-import           Network.Socket hiding (send, sendTo, recv, recvFrom)
+import           Network.Socket             (SockAddr)
 import           Options.Applicative
 import           Options.Applicative.Arrows
 import           System.IO
-import           System.Mem (performGC)
+import           System.Mem                 (performGC)
 import           Text.Printf
 
 -- |Timestamp in seconds since POSIX epoch
@@ -64,7 +64,7 @@ data Args = Args
 
 argsParser :: Parser Args
 argsParser = runA $ proc () -> do
-    argNumReq <- asA (option auto $ value 1 <> metavar "NUM" <> short 'n'
+    argNumReq <- asA (option auto $ value 1 <> metavar "NUM" Mon.<> short 'n'
                       <> help "number of requests" <> showDefault) -< ()
 
     argThrCnt <- asA (option auto $ value numCapabilities <> metavar "NUM" <> short 't'
@@ -136,7 +136,7 @@ main = runInUnboundThread $ do
     sa <- getSockAddr hostname portnum
     lsa <- if null (argLAddr pargs)
            then return Nothing
-           else fmap Just $ getSockAddr (argLAddr pargs) aNY_PORT
+           else fmap Just $ getSockAddr (argLAddr pargs) 0
 
     when verbose $
         printf "connecting to %s (using local address %s)\n" (show sa) (maybe "*:*" show lsa)

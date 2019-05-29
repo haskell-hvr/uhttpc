@@ -1,4 +1,6 @@
-{-# LANGUAGE BangPatterns, CPP, OverloadedStrings #-}
+{-# LANGUAGE BangPatterns      #-}
+{-# LANGUAGE CPP               #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 -- |Minimal HTTP client implementation
 --
@@ -50,25 +52,32 @@ module Network.HTTP.MicroClient
 #if !MIN_VERSION_base(4,8,0)
 import           Control.Applicative
 #endif
-import           Control.DeepSeq (NFData(rnf),deepseq)
+import           Control.DeepSeq              (NFData (rnf), deepseq)
 import           Control.Exception
 import           Control.Monad
-import           Data.ByteString (ByteString)
-import qualified Data.ByteString as B
-import           Data.ByteString.Lex.Integral (packDecimal, readDecimal,readHexadecimal)
-import qualified Data.ByteString.Unsafe as B
+import           Data.ByteString              (ByteString)
+import qualified Data.ByteString              as B
+import           Data.ByteString.Lex.Integral (packDecimal, readDecimal,
+                                               readHexadecimal)
+import qualified Data.ByteString.Unsafe       as B
 import           Data.IORef
 import           Data.Maybe
+#if !MIN_VERSION_base(4,11,0)
 import           Data.Monoid
+#endif
 import           Data.Tuple
 import           Data.Word
-import           Network
-import           Network.BSD
-import           Network.Socket hiding (send, sendTo, recv, recvFrom)
+import           Network.BSD                  (getHostByName, getProtocolNumber,
+                                               hostAddress)
+import           Network.Socket               (Family (AF_INET), HostName,
+                                               PortNumber, ProtocolNumber,
+                                               SockAddr (SockAddrInet), Socket,
+                                               SocketType (Stream), bind, close,
+                                               connect, socket)
 import           Network.Socket.ByteString
 import           Network.URI
 import           System.IO.Error
-import           System.IO.Unsafe (unsafePerformIO)
+import           System.IO.Unsafe             (unsafePerformIO)
 
 -- |Minimal socket input-stream abstraction w/ single pushback & consumed byte-count
 --
@@ -77,7 +86,7 @@ data SockStream = SockStream {-# NOUNPACK #-} !Socket
                              {-# UNPACK #-} !(IORef ByteString)
                              {-# UNPACK #-} !(IORef Word64) -- note: does contain readbuf's size
                              {-# UNPACK #-} !(IORef Word64) -- data written
-                             {-# UNPACK #-}   !Int -- hack: connection-id
+                             {-# UNPACK #-} !Int -- hack: connection-id
 
 -- |Internal debug tracing helper
 ssDebug :: String -> SockStream -> IO a -> IO a
@@ -313,7 +322,7 @@ recvHttpHeaders ss = do
 
     httpParseHeaderDone :: (ByteString,[ByteString]) -> Bool
     httpParseHeaderDone (_,l:_) | B.null l = True
-    httpParseHeaderDone _ = False
+    httpParseHeaderDone _       = False
 
 data HttpResponse = HttpResponse
     { respCode       :: !HttpCode    -- ^ status code
